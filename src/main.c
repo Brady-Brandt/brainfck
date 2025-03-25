@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdnoreturn.h>
 #include <stdarg.h>
+#include <ctype.h>
 
 
 /*
@@ -18,7 +19,6 @@
 ] 	If the byte at the data pointer is nonzero, then instead of moving the instruction pointer forward to the next command, jump it back to the command after the matching [ command.[a]
 
 */
-
 
 
 typedef enum {
@@ -52,8 +52,11 @@ typedef struct {
 
 
 
+const char* OUT_OF_MEM = "Out of Memory\n";
+const char* NUMBER_WARNING = "Numbers front of Instruction %c will be ignored\nLine: %d -> %d%c\n";
+
 noreturn void fatal_error(const char* fmt, ...){
-    printf("Error: ");
+    fprintf(stderr,"Error: ");
     va_list list;
     va_start(list, fmt);
     vfprintf(stderr, fmt, list);
@@ -62,10 +65,19 @@ noreturn void fatal_error(const char* fmt, ...){
 }
 
 
+void warning(const char* fmt, ...){
+    fprintf(stderr,"Warning: ");
+    va_list list;
+    va_start(list, fmt);
+    vfprintf(stderr, fmt, list);
+    va_end(list);
+}
+
+
 Tokens tokens_init(){
     Tokens result;
     result.data = malloc(1024 * sizeof(Token));
-    if(result.data == NULL) fatal_error("Out of Memory\n");
+    if(result.data == NULL) fatal_error(OUT_OF_MEM);
     result.capacity = 1024;
     result.size = 0;
     return result;
@@ -76,7 +88,7 @@ void tokens_append(Tokens* tokens, Token token){
     if(tokens->size == tokens->capacity){
         tokens->capacity *=2;
         tokens->data = realloc(tokens->data, tokens->capacity);
-        if(tokens->data == NULL) fatal_error("Out of Memory\n");
+        if(tokens->data == NULL) fatal_error(OUT_OF_MEM);
     }
     tokens->data[tokens->size++] = token;
 }
@@ -116,7 +128,7 @@ void stack_push(Stack* stack, uint32_t value){
 
 
 //tries to convert repeated instructions into a number and the instruction
-void check_continous_tokens(FILE* file, char current_char, Tokens* tokens){ 
+void check_continous_tokens(FILE* file, char current_char, Tokens* tokens, uint32_t number, uint32_t line){ 
     uint32_t count = 0;
     while(true){
         count++;
@@ -130,7 +142,19 @@ void check_continous_tokens(FILE* file, char current_char, Tokens* tokens){
         fgetc(file);
 
     }
-    tokens_append(tokens, (Token){current_char, .amount=count}); 
+
+    if(number != 0) {
+        number -= 1;
+    }
+    uint32_t total = count + number;
+
+    if(current_char == ','){
+        warning("Redunant Use of Instruction ','\nLine %d: Attempting to take user input %d times without incrementing the data pointer\n", line, total);
+        total = 0;
+    }
+
+
+    tokens_append(tokens, (Token){current_char, .amount=total}); 
 
 }
 
@@ -153,7 +177,7 @@ typedef struct {
 Program init_progam(uint32_t size){
     Program p;
     p.cells = calloc(size, 8);
-    if(p.cells == NULL) fatal_error("Out of Memory\n");
+    if(p.cells == NULL) fatal_error(OUT_OF_MEM);
     p.dp = 0;
     return p;
 }
@@ -181,7 +205,10 @@ int main(int argc, char** argv){
 
     Tokens tokens = tokens_init();
     Stack bracket_stack = {0};
-    uint32_t line_count = 0;
+    uint32_t line_count = 1;
+
+
+    uint32_t number = 0;
 
     while(true){
         char c = fgetc(stream);
@@ -195,14 +222,18 @@ int main(int argc, char** argv){
             case '-':
             case '.':
             case ',':
-                check_continous_tokens(stream, c, &tokens);
+                check_continous_tokens(stream, c, &tokens, number, line_count);
+                number = 0;
                 break;
-            case '[': 
+            case '[':
+                if(number != 0) warning(NUMBER_WARNING, c, line_count, number,c, number);
+                number = 0;
                 tokens_append(&tokens, (Token){c, .offset= 0});
                 stack_push(&bracket_stack, tokens.size - 1);
                 break;                     
             case ']':
                 {
+                if(number != 0) warning(NUMBER_WARNING, c, line_count, number,c, number);
                 if(bracket_stack.size < 1) fatal_error("Mismatched Brackets on Line %d\n", line_count); 
                  uint32_t opening_index = stack_pop(&bracket_stack);
                  Token end_bracket = {c, .offset = opening_index};
@@ -217,6 +248,19 @@ int main(int argc, char** argv){
                 line_count++;
                 break;
             default:
+                if(isdigit(c)){
+                    while(true){
+                        number = number * 10 + (c - 48);
+                        fpos_t pos;
+                        fgetpos(stream, &pos);
+                        char next_char = fgetc(stream);
+                        fsetpos(stream, &pos);
+
+                        if(!isdigit(next_char)) break;
+                        c = fgetc(stream);
+
+                    }
+                }
                 break;
         }
     }
@@ -245,7 +289,9 @@ int main(int argc, char** argv){
                 p.cells[p.dp] -= tok.amount;
                 break;
             case '.':
-                fputc(p.cells[p.dp], stdout);
+                for(int i = 0; i < tok.amount; i++){
+                    fputc(p.cells[p.dp], stdout);
+                }
                 break;
             case ',':
                 p.cells[p.dp] = fgetc(stdin);
