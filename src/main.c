@@ -7,7 +7,6 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <string.h>
-#include <sys/unistd.h>
 
 
 /*
@@ -238,12 +237,16 @@ void interpret_progam(uint32_t size, Tokens* tokens){
         if(asm_stream == NULL) fatal_error("Failed to create assembly file\n");
 
 
+
+
         #if defined (__APPLE__) && defined (__MACH__)
+            int exit_syscall = 0x2000001;
             fprintf(asm_stream, "global start\nsection .bss\ncells: resb %d\nsection .text\n", size);
             fprintf(asm_stream, "print:\nmov rax,0x2000004\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n");
             fprintf(asm_stream, "input:\nmov rax,0x20000000\nmov rdi, 0\nmov rdx,1\nsyscall\nret\n");
             fprintf(asm_stream, "start:\nmov r13,0\n");
         #else
+            int exit_syscall = 60;
             fprintf(asm_stream, "global _start\nsection .bss\ncells: resb %d\nsection .text\n", size);
             fprintf(asm_stream, "print:\nmov rax,1\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n");
             fprintf(asm_stream, "input:\nmov rax, 0\nmov rdi, 0\nmov rdx, 1\nsyscall\nret\n");
@@ -289,7 +292,7 @@ void interpret_progam(uint32_t size, Tokens* tokens){
 
         
         //exit syscall
-        fprintf(asm_stream,"mov rax, 60\nxor rdi,rdi\nsyscall\n");
+        fprintf(asm_stream,"mov rax, %d\nxor rdi,rdi\nsyscall\n", exit_syscall);
         fclose(asm_stream);
 
         #define BUF_SIZE 512
