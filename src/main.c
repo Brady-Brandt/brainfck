@@ -241,17 +241,21 @@ void interpret_progam(uint32_t size, Tokens* tokens){
 
         #if defined (__APPLE__) && defined (__MACH__)
             int exit_syscall = 0x2000001;
-            fprintf(asm_stream, "global start\nsection .bss\ncells: resb %d\nsection .text\n", size);
-            fprintf(asm_stream, "print:\nmov rax,0x2000004\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n");
-            fprintf(asm_stream, "input:\nmov rax,0x20000000\nmov rdi, 0\nmov rdx,1\nsyscall\nret\n");
-            fprintf(asm_stream, "start:\nmov r13,0\n");
+            int print_syscall = 0x2000004;
+            int input_syscall = 0x2000000;
+            const char* obj_type = "macho64";
         #else
             int exit_syscall = 60;
-            fprintf(asm_stream, "global _start\nsection .bss\ncells: resb %d\nsection .text\n", size);
-            fprintf(asm_stream, "print:\nmov rax,1\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n");
-            fprintf(asm_stream, "input:\nmov rax, 0\nmov rdi, 0\nmov rdx, 1\nsyscall\nret\n");
-            fprintf(asm_stream, "_start:\nmov r13,0\n");
+            int print_syscall = 1;
+            int input_syscall = 0;
+            const char* obj_type = "elf64";
         #endif
+
+
+        fprintf(asm_stream, "global _start\nsection .bss\ncells: resb %d\nsection .text\n", size);
+        fprintf(asm_stream, "print:\nmov rax,%d\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n", print_syscall);
+        fprintf(asm_stream, "input:\nmov rax, %d\nmov rdi, 0\nmov rdx, 1\nsyscall\nret\n", input_syscall);
+        fprintf(asm_stream, "_start:\nmov r13,0\nlea r12, [rel cells]\n");
 
  
         for(uint32_t i = 0; i < tokens->size; i++){
@@ -264,24 +268,24 @@ void interpret_progam(uint32_t size, Tokens* tokens){
                     fprintf(asm_stream, "sub r13, %d\n", tok.amount);
                     break;
                 case '+':
-                    fprintf(asm_stream, "mov al, byte [cells + r13]\nadd al, %d\nmov byte [cells + r13], al\n", tok.amount);
+                    fprintf(asm_stream,"add [r12 + r13], byte %d\n", tok.amount);
                     break;
                 case '-':
-                    fprintf(asm_stream, "mov al, byte [cells + r13]\nsub al, %d\nmov byte [cells + r13], al\n", tok.amount);
+                    fprintf(asm_stream,"sub [r12 + r13], byte %d\n", tok.amount);
                     break;
                 case '.':
                     for(int i = 0; i < tok.amount; i++){
-                        fprintf(asm_stream, "lea rsi, [cells + r13]\ncall print\n");
+                        fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall print\n");
                     }
                     break;
                 case ',':
-                    fprintf(asm_stream, "lea rsi, [cells + r13]\ncall input\n");
+                    fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall input\n");
                     break;
                 case '[':
-                    fprintf(asm_stream, "cmp byte [cells + r13], 0\nje label%d\nlabel%d:\n", tok.offset, i);
+                    fprintf(asm_stream, "cmp byte [r12 + r13], 0\nje label%d\nlabel%d:\n", tok.offset, i);
                     break;
                 case ']':
-                    fprintf(asm_stream, "cmp byte [cells + r13], 0\njne label%d\nlabel%d:\n", tok.offset, i);
+                    fprintf(asm_stream, "cmp byte [r12 + r13], 0\njne label%d\nlabel%d:\n", tok.offset, i);
                     break;
                 default:     
                     break;
@@ -299,14 +303,13 @@ void interpret_progam(uint32_t size, Tokens* tokens){
         char cmd[BUF_SIZE] = {0};
 
 
-        size_t cmd_len = snprintf(cmd, BUF_SIZE, "nasm -f elf64 %s -o %s", assembly_file, object_file);
+        size_t cmd_len = snprintf(cmd, BUF_SIZE, "nasm -f %s %s -o %s", obj_type, assembly_file, object_file);
         int ret = system(cmd);
         if(ret != 0) fatal_error("Failed to execute nasm\n");
 
         memset(cmd,0, cmd_len + 1);
 
-
-        snprintf(cmd, BUF_SIZE, "ld -s -o %s %s", output_file, object_file);
+        snprintf(cmd, BUF_SIZE, "ld -e _start -static -o %s %s", output_file, object_file);
 
         ret = system(cmd);
         if(ret != 0) fatal_error("Failed to execute ld\n");
