@@ -236,79 +236,132 @@ void interpret_progam(uint32_t size, Tokens* tokens){
 
         if(asm_stream == NULL) fatal_error("Failed to create assembly file\n");
 
+        #define BUF_SIZE 512
+        char cmd[BUF_SIZE] = {0};
+        int ret;
+        size_t cmd_len;
+ 
 
+        #if defined(__x86_64__) || defined(_M_X64)
+            #if defined (__APPLE__) && defined (__MACH__)
+                int exit_syscall = 0x2000001;
+                int print_syscall = 0x2000004;
+                int input_syscall = 0x2000000;
+                const char* obj_type = "macho64";
+            #else
+                int exit_syscall = 60;
+                int print_syscall = 1;
+                int input_syscall = 0;
+                const char* obj_type = "elf64";
+            #endif
 
+            fprintf(asm_stream, "global _start\nsection .bss\ncells: resb %d\nsection .text\n", size);
+            fprintf(asm_stream, "print:\nmov rax,%d\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n", print_syscall);
+            fprintf(asm_stream, "input:\nmov rax, %d\nmov rdi, 0\nmov rdx, 1\nsyscall\nret\n", input_syscall);
+            fprintf(asm_stream, "_start:\nmov r13,0\nlea r12, [rel cells]\n");
 
-        #if defined (__APPLE__) && defined (__MACH__)
-            int exit_syscall = 0x2000001;
-            int print_syscall = 0x2000004;
-            int input_syscall = 0x2000000;
-            const char* obj_type = "macho64";
+     
+            for(uint32_t i = 0; i < tokens->size; i++){
+                Token tok = tokens->data[i];
+                switch (tok.type) { 
+                    case '>':
+                        fprintf(asm_stream, "add r13, %d\n", tok.amount);
+                        break;
+                    case '<':
+                        fprintf(asm_stream, "sub r13, %d\n", tok.amount);
+                        break;
+                    case '+':
+                        fprintf(asm_stream,"add [r12 + r13], byte %d\n", tok.amount);
+                        break;
+                    case '-':
+                        fprintf(asm_stream,"sub [r12 + r13], byte %d\n", tok.amount);
+                        break;
+                    case '.':
+                        for(int i = 0; i < tok.amount; i++){
+                            fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall print\n");
+                        }
+                        break;
+                    case ',':
+                        fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall input\n");
+                        break;
+                    case '[':
+                        fprintf(asm_stream, "cmp byte [r12 + r13], 0\nje label%d\nlabel%d:\n", tok.offset, i);
+                        break;
+                    case ']':
+                        fprintf(asm_stream, "cmp byte [r12 + r13], 0\njne label%d\nlabel%d:\n", tok.offset, i);
+                        break;
+                    default:     
+                        break;
+                }
+            } 
+            //exit syscall
+            fprintf(asm_stream,"mov rax, %d\nxor rdi,rdi\nsyscall\n", exit_syscall);
+            fclose(asm_stream);
+
+            cmd_len = snprintf(cmd, BUF_SIZE, "nasm -f %s %s -o %s", obj_type, assembly_file, object_file);
+            ret = system(cmd);
+            if(ret != 0) fatal_error("Failed to execute nasm\n");
+
+        #elif defined(__aarch64__) || defined(_M_ARM64)   
+            #if defined(__linux__)
+                //x19 data value, x20 dp
+                fprintf(asm_stream, ".global _start\n.bss\ncells: .fill %d,1\n.text\n", size);
+                fprintf(asm_stream, "print:\nmov X8,#64\nmov X0, #1\nmov X2,1\nsvc 0\nret\n");
+                fprintf(asm_stream, "input:\nmov X8,#63\nmov X0, #0\nmov X2,1\nsvc 0\nret\n");
+                fprintf(asm_stream, "_start:\nmov X19,0\nldr X20, =cells\n");
+                for(uint32_t i = 0; i < tokens->size; i++){
+                    Token tok = tokens->data[i];
+                    switch (tok.type) { 
+                        case '>':
+                            fprintf(asm_stream, "add X20, X20, #%d\n", tok.amount);
+                            break;
+                        case '<':
+                            fprintf(asm_stream, "sub x20, X20, #%d\n", tok.amount);
+                            break;
+                        case '+':
+                            fprintf(asm_stream,"ldrb w19, [X20]\nadd w19, w19,%d\nstrb w19, [X20]\n", tok.amount);
+                            break;
+                        case '-':
+                            fprintf(asm_stream,"ldrb w19, [X20]\nsub w19, w19,%d\nstrb w19, [X20]\n", tok.amount);
+                            break;
+                        case '.':
+                            for(int i = 0; i < tok.amount; i++){
+                                fprintf(asm_stream, "mov X1, X20\nbl print\n");
+                            }
+                            break;
+                        case ',':
+                            fprintf(asm_stream, "mov X1, X20\nbl input\n");
+                            break;
+                        case '[':
+                            fprintf(asm_stream, "ldrb w19, [X20]\ncmp w19, #0\nb.eq label%d\nlabel%d:\n", tok.offset, i);
+                            break;
+                        case ']':
+                            fprintf(asm_stream, "ldrb w19, [X20]\ncmp w19, #0\nb.ne label%d\nlabel%d:\n", tok.offset, i);
+                            break;
+                        default:     
+                            break;
+                    }
+                }
+           
+                //exit
+                fprintf(asm_stream, "mov X0, #0\nmov X8, #93\nsvc 0\n");
+
+                fclose(asm_stream);
+                cmd_len = snprintf(cmd, BUF_SIZE, "as %s -o %s",assembly_file, object_file);
+                ret = system(cmd);
+                if(ret != 0) fatal_error("Failed to execute gnu assembler\n");
+            #else  
+                fclose(asm_stream);
+                fatal_error("Compiler not supported for ARM based Macos\n");
+            #endif
         #else
-            int exit_syscall = 60;
-            int print_syscall = 1;
-            int input_syscall = 0;
-            const char* obj_type = "elf64";
+            fclose(asm_stream);
+            fatal_error("Compiler not supported for this CPU architecture\n");
         #endif
 
 
-        fprintf(asm_stream, "global _start\nsection .bss\ncells: resb %d\nsection .text\n", size);
-        fprintf(asm_stream, "print:\nmov rax,%d\nmov rdi, 1\nmov rdx,1\nsyscall\nret\n", print_syscall);
-        fprintf(asm_stream, "input:\nmov rax, %d\nmov rdi, 0\nmov rdx, 1\nsyscall\nret\n", input_syscall);
-        fprintf(asm_stream, "_start:\nmov r13,0\nlea r12, [rel cells]\n");
-
- 
-        for(uint32_t i = 0; i < tokens->size; i++){
-            Token tok = tokens->data[i];
-            switch (tok.type) { 
-                case '>':
-                    fprintf(asm_stream, "add r13, %d\n", tok.amount);
-                    break;
-                case '<':
-                    fprintf(asm_stream, "sub r13, %d\n", tok.amount);
-                    break;
-                case '+':
-                    fprintf(asm_stream,"add [r12 + r13], byte %d\n", tok.amount);
-                    break;
-                case '-':
-                    fprintf(asm_stream,"sub [r12 + r13], byte %d\n", tok.amount);
-                    break;
-                case '.':
-                    for(int i = 0; i < tok.amount; i++){
-                        fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall print\n");
-                    }
-                    break;
-                case ',':
-                    fprintf(asm_stream, "lea rsi, [r12 + r13]\ncall input\n");
-                    break;
-                case '[':
-                    fprintf(asm_stream, "cmp byte [r12 + r13], 0\nje label%d\nlabel%d:\n", tok.offset, i);
-                    break;
-                case ']':
-                    fprintf(asm_stream, "cmp byte [r12 + r13], 0\njne label%d\nlabel%d:\n", tok.offset, i);
-                    break;
-                default:     
-                    break;
-            }
-
-
-        }
-
-        
-        //exit syscall
-        fprintf(asm_stream,"mov rax, %d\nxor rdi,rdi\nsyscall\n", exit_syscall);
-        fclose(asm_stream);
-
-        #define BUF_SIZE 512
-        char cmd[BUF_SIZE] = {0};
-
-
-        size_t cmd_len = snprintf(cmd, BUF_SIZE, "nasm -f %s %s -o %s", obj_type, assembly_file, object_file);
-        int ret = system(cmd);
-        if(ret != 0) fatal_error("Failed to execute nasm\n");
 
         memset(cmd,0, cmd_len + 1);
-
         snprintf(cmd, BUF_SIZE, "ld -e _start -static -o %s %s", output_file, object_file);
 
         ret = system(cmd);
@@ -320,11 +373,7 @@ void interpret_progam(uint32_t size, Tokens* tokens){
         ret = remove(object_file);
         if(ret != 0) fatal_error("Failed to cleanup: %s\n", object_file);
 
-
-    }
-
-
-
+    } 
 #else
     void compile_progam(const char* file_name, const char* output_file, uint32_t size, Tokens* tokens){
         fatal_error("The compiler is not supported for this platform\n");
@@ -403,7 +452,7 @@ int main(int argc, char** argv){
     while(true){
         char c = fgetc(stream);
 
-        if(c == EOF) break;
+        if(feof(stream)) break;
 
         switch (c) {
             case '>':
