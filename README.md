@@ -8,7 +8,9 @@
 * ### Arm64 Linux
   - GNU assembler
   - GNU Linker (ld)
-* ### 64 bit Windows (Not supported yet)
+* ### x86_64 Windows
+  - Nasm
+  - gcc
 
 ## Getting Started
 ### Clone the Repo
