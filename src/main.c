@@ -218,7 +218,84 @@ void interpret_progam(uint32_t size, Tokens* tokens){
 
 #if defined(_WIN64)
     void compile_progam(const char* file_name, const char* output_file, uint32_t size, Tokens* tokens){
-        fatal_error("The compiler is not supported for windows yet\n");
+        size_t file_name_len = strlen(file_name) + 5;
+        char assembly_file[file_name_len];
+
+        char object_file[file_name_len + 7];
+
+
+        sprintf(assembly_file,"%s.asm", file_name);
+        sprintf(object_file, "%s.o", assembly_file);
+
+     
+        FILE* asm_stream = fopen(assembly_file, "w");
+
+
+        fprintf(asm_stream, "global main\nextern fputc\nextern exit\nextern fgetc\nextern __acrt_iob_func\n");
+        fprintf(asm_stream, "section .bss\ncells: resb %d\nsection .text\n main:\n", size);
+        //move stdout pointer into r12
+        fprintf(asm_stream, "mov rcx, 1\ncall __acrt_iob_func\nmov r12, rax\n");
+        //move stdin pointer into r13
+        fprintf(asm_stream, "mov rcx, 0\ncall __acrt_iob_func\nmov r13, rax\n");
+        //load dp in r14 and cells pointer in r15
+        fprintf(asm_stream, "mov r14,0\nlea r15, [rel cells]\n");
+
+        for(uint32_t i = 0; i < tokens->size; i++){
+                Token tok = tokens->data[i];
+                switch (tok.type) { 
+                    case '>':
+                        fprintf(asm_stream, "add r14, %d\n", tok.amount);
+                        break;
+                    case '<':
+                        fprintf(asm_stream, "sub r14, %d\n", tok.amount);
+                        break;
+                    case '+':
+                        fprintf(asm_stream,"add [r15 + r14], byte %d\n", tok.amount);
+                        break;
+                    case '-':
+                        fprintf(asm_stream,"sub [r15 + r14], byte %d\n", tok.amount);
+                        break;
+                    case '.':
+                        for(int i = 0; i < tok.amount; i++){
+                            fprintf(asm_stream, "mov rcx, [r15 + r14]\nmov rdx, r12\ncall fputc\n");
+                        }
+                        break;
+                    case ',':
+                        fprintf(asm_stream, "mov rcx, r13\ncall fgetc\nmov [r15 + r14], rax\n");
+                        break;
+                    case '[':
+                        fprintf(asm_stream, "cmp byte [r15 + r14], 0\nje label%d\nlabel%d:\n", tok.offset, i);
+                        break;
+                    case ']':
+                        fprintf(asm_stream, "cmp byte [r15 + r14], 0\njne label%d\nlabel%d:\n", tok.offset, i);
+                        break;
+                    default:     
+                        break;
+                }
+            }
+
+
+        fprintf(asm_stream,"mov rcx, 0\ncall exit");
+        fclose(asm_stream);
+        #define BUF_SIZE 512
+        char cmd[BUF_SIZE] = {0};
+        int ret;
+        size_t cmd_len;
+
+        cmd_len = snprintf(cmd, BUF_SIZE, "nasm -f win64 %s -o %s", assembly_file, object_file);
+        ret = system(cmd);
+        if(ret != 0) fatal_error("Failed to execute nasm\n");
+
+        memset(cmd,0, cmd_len + 1);
+        snprintf(cmd, BUF_SIZE, "gcc -o %s %s", output_file, object_file);
+
+        ret = system(cmd);
+        if(ret != 0) fatal_error("Failed to execute gcc\n");
+
+        ret = remove(assembly_file);
+        if(ret != 0) fatal_error("Failed to cleanup: %s\n", assembly_file);
+        ret = remove(object_file);
+        if(ret != 0) fatal_error("Failed to cleanup: %s\n", object_file);
     } 
 #elif defined(__APPLE__) && defined(__MACH__)  || defined(__linux__)
     void compile_progam(const char* file_name, const char* output_file, uint32_t size, Tokens* tokens){
