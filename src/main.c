@@ -1,5 +1,3 @@
-#include <stdint.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <stdbool.h>
 #include <stdlib.h>
@@ -7,6 +5,7 @@
 #include <stdarg.h>
 #include <ctype.h>
 #include <string.h>
+#include <stdint.h>
 
 
 /*
@@ -49,6 +48,9 @@ typedef struct {
     uint32_t capacity;
     uint32_t size;
 } Tokens;
+
+
+#define MAX_PROGRAM_SIZE UINT32_MAX
 
 
 
@@ -162,8 +164,9 @@ void check_continous_tokens(FILE* file, char current_char, Tokens* tokens, uint3
 
 #define DEFAULT_PROGAM_SIZE 1000000
 
-void interpret_progam(uint32_t size, Tokens* tokens){
-    int8_t* cells = calloc(size, 8);
+void interpret_progam(Tokens* tokens){
+    uint32_t cell_size = 4;
+    int8_t* cells = calloc(cell_size, 1);
     if(cells == NULL) fatal_error(OUT_OF_MEM);
 
     uint32_t dp = 0;    
@@ -173,10 +176,27 @@ void interpret_progam(uint32_t size, Tokens* tokens){
     while(ip < tokens->size){
         Token tok = tokens->data[ip];
         switch (tok.type) { 
-            case '>': 
+            case '>':
+                if((uint64_t)dp + (uint64_t)tok.amount > MAX_PROGRAM_SIZE){
+                    fatal_error("Max Memory %d bytes Exceeded -> %d\n", MAX_PROGRAM_SIZE,(uint64_t)(dp + tok.amount));
+                }
                 dp += tok.amount;
+
+                if(dp >= cell_size){
+                    uint64_t new_size = cell_size * 2; 
+                    if(new_size > MAX_PROGRAM_SIZE){
+                        new_size = MAX_PROGRAM_SIZE;
+                    }
+                    int8_t* tmp = realloc(cells, new_size);
+                    
+                    if(tmp == NULL) fatal_error(OUT_OF_MEM);
+                    memset(tmp + cell_size, 0, new_size - cell_size);
+                    cell_size = new_size;
+                    cells = tmp;
+                }
                 break;
             case '<':
+                if(dp - tok.amount > dp) fatal_error("Data pointer underflow\n");
                 dp -= tok.amount;
                 break;
             case '+':
@@ -524,7 +544,7 @@ int main(int argc, char** argv){
     uint32_t line_count = 1;
 
 
-    uint32_t number = 0;
+    uint64_t number = 0;
 
     while(true){
         char c = fgetc(stream);
@@ -576,6 +596,7 @@ int main(int argc, char** argv){
                         c = fgetc(stream);
 
                     }
+                    if(number > 255) warning("Numbers larger than 255 will be truncated to 255\nLine %d -> %d\n", line_count, number);
                 }
                 break;
         }
@@ -585,7 +606,7 @@ int main(int argc, char** argv){
     if(bracket_stack.size != 0) fatal_error("No Final Closing Bracket\n");
 
     if(interpret){
-        interpret_progam(DEFAULT_PROGAM_SIZE, &tokens); 
+        interpret_progam(&tokens); 
     }
     else{
         compile_progam(file_name, output_name, DEFAULT_PROGAM_SIZE, &tokens);
